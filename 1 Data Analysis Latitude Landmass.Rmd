@@ -1,0 +1,918 @@
+---
+title: "3 Data Analysis Latitude Landmass"
+output: 
+---
+
+This is the code used to analyse data for the 'abiotic factors' section of the biocontrol and enemy release literature compilation project.
+
+In this notebook we will:
+- test the hypothesis that enemy release is stronger at lower latitudes
+- test the hypothesis that enemy release is stronger on smaller landmasses, and specifically between islands and continents.
+- test the hypothesis that enemy release increases with temperature and precipitation, but decreases with climate variability.
+
+-> and we will perform these tests seperately for biogeographical and community enemy release 
+(see previous studies for why this is important)
+
+#The ERM
+Summary:
+The enemy release metric is a log response ratio with a control amount of enemy pressure representing what we expect enemy pressure should be as the numerator, and what the actual recorded enemy pressure was for an introduced population as the denominator.
+
+eg.
+
+if enemy pressure in the native range is 10 'eggs lost to snakes per year'
+and enemy pressure in the introduced range is '5 lost to snakes per year'
+ERM = log 10/5 = log 2 = 0.69
+
+if enemy pressure in native range is 10 'percent reduced growth'
+and enemy pressure in the introduced range is 20 'percent reduced growth'
+ERM = log 10/20 = log 0.5 = -1.1
+
+if enemy pressure in the native range is 10 'species of predators'
+and enemy pressure in the introduced range is also 10 'species of predators'
+ERM = log10/10 = log 1 = 0
+
+
+
+##Load packages
+```{r}
+#general
+library(tidyverse) #pipes and general data wrangling
+library(ggplot2) #for plots
+library(ggpubr) #for combining multiple plots and general nice looking customisations
+
+library(forcats)#reordering factors for nicer graphs
+library(lme4) #for mixed model
+library(lmerTest) #for p values
+library(MuMIn) #for Rsquareds of mixed models
+library(car) #for type 2 ANOVAs
+
+
+#landmass size analysis
+#library(rnaturalearth) #for earth data
+#library(rgeos) #geometry interface
+#library(sp) #spatial package
+#library(sf) #simple spatial
+#library(raster) #raster package, also access to worldclim variables
+
+```
+
+##Define palette and function to interperet ERM for aesthetic use (not in R folder because it is not important)
+```{r}
+mypal <- c("#264653", "#2A9D8F", "#E9C46A", "#F4A261", "#E76F51")
+
+interperet_erm <- function(erm) {
+  print("native/introduced range ratio is")
+  print(exp((erm))) #the double brackets are needed for proper order of operations for some reason
+  print("aka, introduced species only experience")
+  print(1/exp((erm)))
+  print("of the enemy pressure that we expect based on the control population that doesn't benefit from enemy release")
+}
+```
+
+#Determine whether to use weights for data
+
+##Choose weighting method
+Check whether to use a inverse variance or sample size based weight
+```{r}
+data_main <- read.csv( "./output/data_main_final.csv")
+
+count(data_main%>% filter(is.na(n1) | is.na(n2)))
+count(data_main%>% filter(is.na(sd1) | is.na(sd2)))
+```
+
+We will try to use sample size because it gives much more complete information. It's still a bit tricky though since we don't have n for 48 contrasts
+
+##Check sample sizes for outliers and NAs
+
+First let's look for outliers in sample size
+```{r}
+hist(data_main$n1)
+hist(data_main$n2)
+hist(data_main$n1[data_main$n1<500])
+hist(data_main$n2[data_main$n2<500])
+
+```
+
+Most seem to be ok until 300.
+Export outlying and NA records to be double checked for an effective sample size.
+```{r}
+data_main %>% filter(is.na(n1) | is.na(n2) | n1 > 300 | n2 > 300)
+```
+
+There were too many records where sample size didn't actually reflect study breadth (176).
+It seems that the records that report individual records would be weighted too highly compared to records that report plot averages.
+
+So we chose to not use a weighted model i.e. each introduced population should be weighted equally.
+
+```{r}
+#data_main$weights <- (data_main$n1*data_main$n2)/(data_main$n1+data_main$n2)
+#hist(data_main$weights)
+```
+
+#make sure that the factors are in the right format
+```{r}
+data_main$source_filename <- as.factor(data_main$source_filename)#make sure the factors are in factor format
+data_main$species_type2 <- as.factor(data_main$species_type2)
+data_main$response <- as.factor(data_main$response) 
+```
+
+
+#1. Latitude
+
+Let's analyse ERM with absolute value of the latitude,
+so that N and S hemispheres will be combined.
+
+##Separate dataset into biogeographic and community records
+```{r}
+data_b <- data_main %>% filter(data_main$experiment_type == "b")
+data_c <- data_main %>% filter(data_main$experiment_type == "c")
+```
+
+##Should we take the absolute value of latitude?
+
+We want to test for distance from equator since 10 degrees N should have the same effect as 10 degrees S, rather than opposing effects.
+So we should take the absolute value of latitude instead of base value.
+However, if there were significant differences based on hemisphere, we should take this into account.
+
+```{r}
+data_b$hemisphere <- as.factor(ifelse(data_b$location_lat > 0, "n", "s"))
+data_c$hemisphere <- as.factor(ifelse(data_c$location_lat > 0, "n", "s"))
+```
+
+##Latitude * Enemy Release
+```{r}
+lm_latitude_b <- lmer(erm ~ abs(location_lat) + hemisphere:abs(location_lat) + response + (1|source_filename) + (1|species_type2), data =  data_b)
+
+summary(lm_latitude_b)
+r.squaredGLMM(lm_latitude_b)
+
+emtrends(lm_latitude_b, "hemisphere", var = "abs(location_lat)")
+```
+```{r}
+mean(abs(data_b$location_lat))
+
+mean(data_b$erm)
+```
+
+
+##Investigate the singularity warning
+```{r}
+rePCA(lm_latitude_b)
+summary(allFit(lm_latitude_b))
+```
+
+##Do we seperately analyse? (no but the option is here)
+```{r}
+#data_bn <- data_b %>% filter(hemisphere == "n")
+#data_bs <- data_b %>% filter(hemisphere == "s")
+
+#lm_latitude_bn <- lmer(erm ~ abs(location_lat) + response + (1|source_filename) + (1|species_type2), data =  data_bn)
+#summary(lm_latitude_bn)
+
+#lm_latitude_bs <- lmer(erm ~ abs(location_lat) + response + (1|source_filename) + (1|species_type2), data =  data_bs)
+#summary(lm_latitude_bs)
+```
+
+
+We have an issue in biogeographic studies where most studies look at a single introduced species, leading to very little overlap between species type and study. Changing the optimiser doesn't look like it substantially impacts the fixed effect that we are interested in (in this case, latitude). Besides removing species as a random effect (which shouldn't change the rest of the model anyways), there doesn't seem any way around it.
+
+```{r}
+print("biogeographic native/introduced ratio at equator")  #without a specific hemisphere, response type or species in mind
+interperet_erm(0.874)
+
+print("biogeographic native/introduced ratio at at 20 degrees N")
+interperet_erm(0.874 + (20*-0.0117))
+
+print("biogeographic native/introduced ratio at at 20 degrees S")
+interperet_erm(0.874 + (20*(-0.0117-0.0131)))
+```
+
+Latitude has a significant relationship with biogeographic enemy release (introductions further from the equator experience lower enemy release). Experiment type and hemisphere also relate to enemy release. 
+Based on the difference between marginal and conditional R squareds, the random effects (study source and species type but note species type has singularity issues) explain a lot more though...
+
+```{r}
+lm_latitude_c <- lmer(erm ~ abs(location_lat) + hemisphere:abs(location_lat) + response + (1|source_filename) + (1|species_type2), data = data_c)
+
+summary(lm_latitude_c)
+r.squaredGLMM(lm_latitude_c)
+```
+Latitude does not have a significant relationship with community enemy release.
+
+##Graphs for latitude
+
+```{r}
+fig_1a <- ggplot(data_b, aes(x = abs(location_lat), y = erm)) +
+  geom_point(colour = mypal[2], alpha = 0.5)+
+    geom_segment(x = 0, y = 0.874017, xend = 63, yend = 0.874017 + (63 * -0.011783),
+                 colour = mypal[1], linewidth = 1, linetype = 3) + #trendline N
+    geom_segment(x = 0, y = 0.874017, xend = 63, yend = 0.874017 + (63 * (-0.011783 -0.013102)),
+                 colour = mypal[1], linewidth = 1, linetype = 1) + #trendline S
+    theme_pubr()+
+  theme(axis.title=element_text(size = 12))+
+  scale_y_continuous(name = "Enemy Release Metric",
+                     breaks = c(-4, -2, 0, 2, 4, 6), 
+                     limits = c(-4.2,7))+
+  scale_x_continuous(name = "Distance from equator (degrees)", 
+                     breaks = c(0, 20, 40, 60), 
+                     limits = c(0,70))
+
+fig_1b <- ggplot(data_c, aes(x = abs(location_lat), y = erm)) +
+  geom_point(colour = mypal[5], alpha = 0.5)+
+  theme_pubr()+
+  theme(axis.title = element_text(size = 12))+
+  scale_y_continuous(name = "Enemy Release Metric",
+                     breaks = c(-4, -2, 0, 2, 4, 6), 
+                     limits = c(-4.2,7))+
+  scale_x_continuous(name = "Distance from equator (degrees)", 
+                     breaks = c(0, 20, 40, 60), 
+                     limits = c(0,70))
+
+
+fig1 <- annotate_figure(ggarrange(fig_1a+ rremove("ylab") + rremove("xlab"),
+                                 fig_1b + rremove("ylab") + rremove("xlab"), 
+                                 labels = c("a)", "b)"), hjust = 0.5),
+                       bottom = text_grob("Distance from equator (degrees)", face = "bold", size = 14),
+                       left = text_grob("Enemy Release Metric\n", rot = 90, face = "bold", size = 14)) 
+#note that we manually added the equation for enemy release under the blank section in illustrator
+fig1
+
+ggexport(fig1, filename = "./output/ch2 figures/Figure1_unedited.pdf",
+         width = 7.5, height = 4)
+```
+
+#2. Landmass 
+
+We used the USGS map of Global Islands (https://www.usgs.gov/publications/global-islands, https://doi.org/10.1016/B978-0-13-409548-9.13475-3), consisting of continental mainlands (5), big islands > 1 km3 (31,818), and small islands ≤ 1 km3 (318,868).
+
+Enemy Release dataset along with Global islands was imported into QGIS to create additional landmass enemy release data, consisting of an additional column where the landmass size in km^3 if each point is included.
+
+##Load datasets
+```{r}
+land <- read.csv("./data/data_main_landsize.csv") #matching dataset from Qgis
+
+land <- bind_cols(data_main, land[15:24]) #match landsize data to main
+```
+
+##Collate landmass size (km^2) data from two different columns
+```{r}
+land$km_sq <- ifelse(is.na(land$IslandArea), land$Area_km2, land$IslandArea)
+```
+
+##Filter out aquatic records and those with no landmass data (probably aquatic as well) and isolate non-continental islands
+
+land = all records on land
+island = all records on land but not continental
+```{r}
+land <- land %>% filter(
+  !is.na(land$km_sq) & #filter out NA landmass sizes of marine or large freshwater
+  system != "m") #filter out marine species
+
+
+island <- land %>% filter(land$layer != "Continents")
+```
+
+##Transforming landmass size
+
+Compare a couple of transformation of differing strengths for island landmass sizes
+```{r}
+ggplot(island, aes(x = km_sq))+
+  geom_density()
+
+ggplot(island, aes(x = sqrt(km_sq)))+
+  geom_density()
+
+ggplot(island, aes(x = log(km_sq)))+
+  geom_density()
+
+ggplot(island, aes(x = 1/km_sq))+
+  geom_density()
+```
+The transformations don't seem to make the distribution of points more even, so we will not use any.
+
+##Name continents
+Let's label some continents based on object IDs and separate out islands
+```{r}
+land$continent <- "Island"
+land$continent[land$OBJECTID == 1] <- "Australia"
+land$continent[land$OBJECTID == 2] <- "Africa"
+land$continent[land$OBJECTID == 3] <- "South America"
+land$continent[land$OBJECTID == 4] <- "North America"
+land$continent[land$OBJECTID == 5] <- "Eurasia"
+
+land$mainland <- ifelse(land$continent == "Island", "Island", "Mainland")
+
+land$continent <- as_factor(land$continent)
+land$continent <- fct_relevel(land$continent, "Island", "Africa", "Australia", "Eurasia", "North America", "South America")
+
+land$continent_yn <- as.factor(if_else(land$continent == "Island", "Island", "Continent"))
+
+table(land$continent, useNA = "always") #check if we missed anything
+table(land$mainland, useNA = "always")
+```
+
+
+##Seperate analysis for biogeo and community again to reflect updated data
+```{r}
+data_b <- land[land$experiment == "b", ]
+data_c <- land[land$experiment == "c", ]
+```
+
+##Landmass * Enemy Release
+```{r}
+lm_landsize_b <- lmer(erm ~ (km_sq) + response + (1|source_filename) + (1|species_type2), data =  data_b)
+
+summary(lm_landsize_b)
+r.squaredGLMM(lm_landsize_b)
+```
+##Investigate the scaling warning
+```{r}
+#we'll transform the scale of kmsq linearly to change the least while addressing the issue
+temp <- data_b
+temp$trans_km_sq <-temp$km_sq*0.000001
+summary(lmer(erm ~ trans_km_sq + response + (1|source_filename) + (1|species_type2), data =  temp))
+rm(temp)
+```
+There's no difference so we can keep the original model
+
+```{r}
+lm_landsize_c <- lmer(erm ~ km_sq + response + (1|source_filename) + (1|species_type2), data =  data_c)
+
+summary(lm_landsize_c)
+r.squaredGLMM(lm_landsize_c)
+```
+##Investigate singularity
+```{r}
+summary(allFit(lm_landsize_c))
+```
+As before, singularities were inevitable with both study and species as a random effect. Shouldn't affect what we want to find though.
+
+Landmass size is not related to enemy release!
+
+##Graph landsize
+
+```{r}
+fig_2a <- ggplot(data = data_b, aes(x = log10(km_sq), y = erm)) + 
+  geom_point(colour = mypal[2],alpha = 0.5) + 
+  scale_y_continuous(name = "Enemy Release\n", 
+                     breaks = c(-4, -2, 0, 2, 4, 6, 8), 
+                     limits = c(-4.2,7))+
+  scale_x_continuous(name = expression(bold(paste("Landmass size (", km^{2}, ")"))),
+                     breaks = c(0, 1, 2, 3, 4, 5, 6, 7, 8),
+                     labels = c(0, "", expression(10^2), "",
+                                expression(10^4), "",
+                                expression(10^6), "",
+                                expression(10^8)),
+                     limits = c(0, 8.1)) +
+  theme_pubr() +
+  theme(axis.title = element_text(size = 12, face = "bold"))
+
+fig_2b <- ggplot(data = data_c, aes(x = log10(km_sq), y = erm)) + 
+  geom_point(colour = mypal[5],alpha = 0.5) + 
+  scale_y_continuous(name = "Enemy Release\n", 
+                     breaks = c(-4, -2, 0, 2, 4, 6, 8), 
+                     limits = c(-4.2,7))+
+  scale_x_continuous(name = expression(bold(paste("Landmass size (", km^{2}, ")"))),
+                     breaks = c(0, 1, 2, 3, 4, 5, 6, 7, 8),
+                     labels = c(0, "", expression(10^2), "",
+                                expression(10^4), "",
+                                expression(10^6), "",
+                                expression(10^8)),
+                     limits = c(0, 8.1)) +
+  theme_pubr() +
+  theme(axis.title = element_text(size = 12, face = "bold"))
+
+```
+##How about Islands? (unused in manuscript, data deficiency made it difficult to justify)
+We don't really have enough records to analyse islands only separately, we will keep the records together and add effect of biogeo vs community.
+
+##Island size * Enemy Release
+```{r}
+lm_islandsize_b <- lmer(erm ~ km_sq + response + (1|source_filename) + (1|species_type2), data = island[island$experiment_type == "b",])
+
+lm_islandsize_c <- lmer(erm ~ km_sq + response + (1|source_filename) + (1|species_type2), data = island[island$experiment_type == "c",])
+
+summary(lm_islandsize_b)
+summary(lm_islandsize_c)
+```
+
+59 records is very small, so I'll just double check whether all the data is from a single paper...
+```{r}
+ggplot(island, aes(x = km_sq, y = erm)) +
+  geom_point(aes(colour = doi, shape = experiment_type), alpha = 0.6)+ 
+  geom_smooth(method=lm, se = FALSE, colour = "#E7B800")+
+  theme(legend.position = "none")
+```
+
+All good. Records seem to be from a variety of studies.
+
+##Graph islandsize
+```{r}
+fig_island <- ggplot(data = island, aes(x = log10(km_sq), y = erm)) + 
+  geom_point(aes(colour = experiment), alpha = 0.5) +
+  scale_colour_manual(values = c(mypal[2], mypal[5])) +
+  scale_y_continuous(name = "Enemy Release Metric",breaks = c(-4, -2, 0, 2, 4, 6, 8), limits = c(-5,8))+
+  scale_x_continuous(name = expression(paste("Island size (", log[10], km^{2}, ")")), breaks = , limits = )+
+  theme_classic() +
+  theme(axis.title = element_text(size = 14), 
+        axis.text = element_text(size = 12), 
+        text = element_text(size = 9), 
+        legend.position = "none")
+
+
+fig_island
+```
+
+
+##ANOVA
+
+
+Maybe many of the island biogeography ideas don't apply when comparing islands that are effectively infinitely large from the perspective of a population. For example, between two massive continents.
+
+Is there a difference between islands and continents?
+Is there a difference between individual continents? (in appendix)
+
+##Between islands and continents
+```{r}
+lm_continentyn_b <- lmer(erm ~ continent_yn + response + (1|source_filename) + (1|species_type2), data = data_b) #tested with rescaling of km_sq/100000, nothing in model really changed so should be fine
+
+anova_continentyn_b <- anova(lm_continentyn_b, type = "II") #from car package
+summary(lm_continentyn_b)
+anova_continentyn_b
+```
+
+```{r}
+lm_continentyn_c <- lmer(erm ~ continent_yn + response + (1|source_filename) + (1|species_type2), data = data_c)
+
+anova_continentyn_c <- anova(lm_continentyn_c, type = "II")
+
+summary(lm_continentyn_c)
+anova_continentyn_c
+```
+
+Biogeographic enemy release differs between islands and continents, but community enemy release does not.
+
+##Between individual continents and islands (appendix)
+
+```{r}
+lm_continent_b <- lmer(erm ~ continent + response + (1|source_filename) + (1|species_type2), data = data_b) 
+
+anova_continent_b <- anova(lm_continent_b, type = "II") #from car package
+
+summary(lm_continent_b)
+anova_continent_b
+
+ls_means(lm_continent_b, which = "continent", level = 0.95, pairwise = TRUE) #post hoc tukey test 
+#note to self that this is the same as difflsmeans(lm_continent_b)
+```
+
+Continents (plus islands group) differed according to ANOVA, with islands having stronger biogeo enemy release than most continents and Eurasia having stronger biogeo enemy release than some other continents (Eur > Aus, Eur > Afr)
+
+```{r}
+lm_continent_c <- lmer(erm ~ continent + response + (1|source_filename) + (1|species_type2), data = data_c) 
+
+anova_continent_c <- anova(lm_continent_c, type = "II")
+
+summary(lm_continent_c)
+anova_continent_c
+
+#difflsmeans(lm_continent_b) #unused, there wasn't a difference according to ANOVA
+```
+Continent didn't differ in community enemy release.
+
+##graph islands and continents
+```{r}
+fig_2c <- ggplot(data_b, aes(x = continent_yn, y = erm)) +
+  geom_boxplot(colour = mypal[2],fill = mypal[2], alpha = 0.5) +
+  theme_pubr()+
+  theme(axis.title = element_text(size = 12,
+                                  face = "bold"),
+        axis.text.x = element_text(size = 12, 
+                                   face = "bold"))+
+  scale_y_continuous(name = "Enemy Release\n",
+                     breaks = c(-4, -2, 0, 2, 4, 6), 
+                     limits = c(-4.2,7))+
+  scale_x_discrete(name = "")
+
+fig_2d <- ggplot(data_c, aes(x = continent_yn, y = erm)) +
+  geom_boxplot(colour = mypal[4],fill = mypal[4], alpha = 0.5) +
+  theme_pubr()+
+  theme(axis.title = element_text(size = 12,
+                                  face = "bold"),
+        axis.text.x = element_text(size = 12, 
+                                   face = "bold"))+
+  scale_y_continuous(name = "Enemy Release\n",
+                     breaks = c(-4, -2, 0, 2, 4, 6), 
+                     limits = c(-4.2,7))+
+  scale_x_discrete(name = "")
+
+fig2 <- annotate_figure(ggarrange(fig_2a,
+                                 fig_2b, 
+                                 fig_2c,
+                                 fig_2d,
+                                 labels = c("a)", "b)", "c)", "d)"), hjust = 1)) 
+#note that we manually added the equation for enemy release under the blank section in illustrator
+fig2
+
+ggexport(fig2, filename = "./output/ch2 figures/Figure2_unedited.pdf",
+         width = 7.5, height = 8)
+```
+
+```{r}
+fig_appendix1a <- ggplot(data = data_b, aes(x = reorder(continent, km_sq), y = erm))+
+  geom_boxplot(alpha = 0.5, colour = mypal[2], fill = mypal[2]) +
+    scale_y_continuous(name = "Enemy Release Metric",
+                     breaks = c(-4, -2, 0, 2, 4, 6), 
+                     limits = c(-4.2,7))+
+  xlab("")+
+  ylab("Enemy Release Metric")+
+    theme_pubr()+
+  theme(axis.title = element_text(size = 12, face = "bold"), 
+        axis.text.x = element_text(size = 12, face = "bold"))
+
+fig_appendix1b <- ggplot(data = data_c, aes(x = reorder(continent, km_sq), y = erm))+
+  geom_boxplot(alpha = 0.5, colour = mypal[4], fill = mypal[4]) +
+    scale_y_continuous(name = "Enemy Release Metric",
+                     breaks = c(-4, -2, 0, 2, 4, 6), 
+                     limits = c(-4.2,7))+
+  xlab("")+
+  ylab("Enemy Release Metric")+
+    theme_pubr()+
+  theme(axis.title = element_text(size = 12, face = "bold"), 
+        axis.text.x = element_text(size = 12, face = "bold"))
+
+fig_appendix1 <- annotate_figure(ggarrange(ncol = 1, nrow = 2,
+                          fig_appendix1a, fig_appendix1b,
+                          labels = c("a)", "b)", hjust = 1)))
+
+ggexport(fig_appendix1, filename = "./output/ch2 figures/Fig_appendix1_unedited.pdf",
+         width = 7.5, height = 8)
+
+fig_appendix1
+```
+
+
+```{r}
+land %>% filter(land$experiment == "b") %>%
+  ggplot(aes(x = continent_yn, y = erm))+
+  geom_boxplot(colour = "#00AFBB", fill = "#00AFBB", alpha = 0.5)+ 
+  xlab(" ")+
+  scale_y_continuous(name = "Enemy Release Metric", 
+                     breaks = c(-4, -2, 0, 2, 4, 6, 8), 
+                     limits = c(-5,8))+
+  theme_classic()+ 
+  theme(axis.title = element_text(size = 14), 
+        axis.text = element_text(size = 12), 
+        text = element_text(size = 9))
+
+land %>% filter(land$experiment == "c") %>%
+  ggplot(aes(x = continent_yn, y = erm))+
+  geom_boxplot(colour = "#FC4E07", fill = "#FC4E07", alpha = 0.5)+ 
+  xlab(" ")+
+  scale_y_continuous(name = "Enemy Release Metric", 
+                     breaks = c(-4, -2, 0, 2, 4, 6, 8), 
+                     limits = c(-5,8))+
+  theme_classic()+ 
+  theme(axis.title = element_text(size = 14), 
+        axis.text = element_text(size = 12), 
+        text = element_text(size = 9))
+
+```
+
+```{r}
+fig2 <-  annotate_figure(ggarrange(fig_2a+ rremove("ylab"),
+                                 fig_2b + rremove("ylab"), 
+                                 labels = c("a)", "b)"), hjust = 1),
+                       left = text_grob("\n\n", rot = 90, face = "bold", size = 14)) 
+#note that we manually re-add enemy release equation into figure
+fig2
+ggexport(fig2, filename = "./output/ch2 figures/Figure2_unedited.pdf",
+         width = 7.5, height = 4)
+```
+
+#3. Climate
+
+##load additional packages
+```{r}
+library(terra) #for rasters
+library(sp)
+library(RHSDB)
+
+library(data.table) #for rbindlist() later on
+#library(emmeans) #for estimated marginal means
+#library(olsrr) #colinearlity (latitude * temperature avg/seasonality)
+```
+
+##Load Climate data 
+
+Bioclim should be a raster stack with 19 layers, the definitions of which can be found here (https://www.worldclim.org/data/bioclim.html)
+
+##Load Climate Data
+
+Had to manually rename some of the folders because the original naming scheme had reading issues.
+```{r}
+bioclim <- rast("./data/worldclim/wc_2point1_10_revised/bio/10m_bio_1.tif") #prepare first raster in stack
+
+for (i in 2:19) {
+  temp <- rast(paste0("./data/worldclim/wc_2point1_10_revised/bio/10m_bio_", i, ".tif"))
+bioclim <- c(bioclim, temp)
+} #loop the other layers to read and then stack on top
+
+rm(i, temp)
+```
+
+## Add bioclim values to data_main as data_clim
+```{r}
+data_coords <- vect(data.frame(lon = data_main$location_lon, lat = data_main$location_lat)) #create coordinates dataframe and convert it to spatial points format
+
+crs(data_coords)<- "EPSG:4326"
+
+data_coords <- data.frame(terra::extract(x = bioclim, y = data_coords)) #for each set of coordinates, find the associated value in each raster
+
+data_clim <- mutate(data_main, 
+                    bio1 = data_coords$X10m_bio_1,
+                    bio2 = data_coords$X10m_bio_2,
+                    bio3 = data_coords$X10m_bio_3,
+                    bio4 = data_coords$X10m_bio_4,
+                    bio5 = data_coords$X10m_bio_5,
+                    bio6 = data_coords$X10m_bio_6,
+                    bio7 = data_coords$X10m_bio_7,
+                    bio8 = data_coords$X10m_bio_8,
+                    bio9 = data_coords$X10m_bio_9,
+                    bio10 = data_coords$X10m_bio_10,
+                    bio11 = data_coords$X10m_bio_11,
+                    bio12 = data_coords$X10m_bio_12,
+                    bio13 = data_coords$X10m_bio_13,
+                    bio14 = data_coords$X10m_bio_14,
+                    bio15 = data_coords$X10m_bio_15,
+                    bio16 = data_coords$X10m_bio_16,
+                    bio17 = data_coords$X10m_bio_17,
+                    bio18 = data_coords$X10m_bio_18,
+                    bio19 = data_coords$X10m_bio_19,
+                    ) #stick the coordinate info back onto main dataset
+rm(data_coords, bioclim)
+
+#write_csv(data_clim, "./output/data_climate.csv") #save/reload in case things break later on
+#data_clim <- read.csv("./output/data_climate.csv")
+```
+
+##Filter out marine and check data
+```{r}
+data_clim <- data_clim %>% filter(data_clim$system != "m")
+```
+
+##Check for unmatched records
+BIOCLIM rasters only had terrestrial climate so mismatch issues cause NAs. Remove NAs
+Eg. large lakes, island cluster centroids
+
+```{r}
+world_coordinates <- map_data("world")
+
+ggplot() + 
+  geom_map(data = world_coordinates, 
+           map = world_coordinates, 
+           aes(map_id = region)) +
+  geom_point(aes(x = data_clim$location_lon,
+                 y = data_clim$location_lat,
+                 colour = data_clim$bio1,
+                 alpha = 0.3))+
+  scale_colour_continuous(low = "darkblue",
+                        high = "lightblue",
+                        na.value = "red")+ 
+  geom_text(hjust=0, 
+            vjust=0, 
+            aes(data_clim$location_lon,
+                data_clim$location_lat, 
+                label = data_clim$rownum))
+```
+
+
+```{r}
+table(is.na(rowMeans(data_clim[37:55]))) #find mean of bio values, since any mean with an NA in will be NA
+
+data_clim <- data_clim %>% filter(is.na(rowMeans(data_clim[37:55])) == F) #remove any record with one NA
+
+table(is.na(rowMeans(data_clim[37:55]))) #there should be no more
+```
+
+I remember that 10.1111/1365-2745.12318 in particular has a stated latitude range but a vague much longitude. It was ok for the previous analyses but not for this one so we drop it now.
+```{r}
+data_clim <- data_clim %>% filter(doi != "10.1111/1365-2745.12318")
+```
+
+Final check and then remove map base
+```{r}
+ggplot() + 
+  geom_map(data = world_coordinates, 
+           map = world_coordinates, 
+           aes(map_id = region)) +
+  geom_point(aes(x = data_clim$location_lon,
+                 y = data_clim$location_lat,
+                 colour = data_clim$bio1,
+                 alpha = 0.3))+
+  scale_colour_continuous(low = "darkblue",
+                        high = "lightblue",
+                        na.value = "red")+ 
+  geom_text(hjust=0, 
+            vjust=0, 
+            aes(data_clim$location_lon,
+                data_clim$location_lat, 
+                label = data_clim$rownum))
+
+rm(world_coordinates)
+```
+
+##Perform linear regressions
+
+#Biogeographic
+```{r}
+data_b <- data_clim %>% filter(experiment_type == "b")
+climate_lm_b <- tibble()
+climate_lm_b <- tibble(var = as.character(), formula = as.character(), est= as.numeric(), se= as.numeric(), t_val= as.numeric(), p_val= as.numeric(), marg_rsq = as.numeric(), warnings = as.character())
+
+for (i in 1:19){
+  formula = paste0("erm ~ bio", i, " + response + (1|source_filename) + (1|species_type2)")
+  model = lmer(formula, data = data_b)
+  climate_lm_b[i, 1] <- paste0("bio", i)
+  climate_lm_b[i, 2] <- formula
+  climate_lm_b[i, 3] <- (summary(model)[["coefficients"]][c(2)])#est
+  climate_lm_b[i, 4] <- (summary(model)[["coefficients"]][c(7)])#se
+  climate_lm_b[i, 5] <- (summary(model)[["coefficients"]][c(17)])#tval
+  climate_lm_b[i, 6] <- (summary(model)[["coefficients"]][c(22)])#pval
+  climate_lm_b[i, 7] <- r.squaredGLMM(model)[1]
+  climate_lm_b[i, 8] <- paste0(model@optinfo$conv$lme4$messages, model@optinfo$warnings, " ") #add space at end so something is pasted into the cell
+}
+
+climate_lm_b$adj_p_val <- p.adjust(climate_lm_b$p_val[1:19], method = "BY", n = 19)
+climate_lm_b$adj_sig <- ifelse(climate_lm_b$adj_p_val < 0.05, T, F)
+climate_lm_b$varname <- rev(c("Precipitation of Coldest Quarter", "Precipitation of Warmest Quarter", "Precipitation of Driest Quarter","Precipitation of Wettest Quarter",  "Precipitation Seasonality", "Precipitation of Driest Month", "Precipitation of Wettest Month", "Annual Precipitation", "Mean Temperature of Coldest Quarter", "Mean Temperature of Warmest Quarter","Mean Temperature of Driest Quarter", "Mean Temperature of Wettest Quarter",  "Temperature Annual Range","Min Temperature of Coldest Month", "Max Temperature of Warmest Month", "Temperature Seasonality", "Isothermality", "Mean Diurnal Range", "Annual Mean Temperature"))
+
+```
+
+##Resolve convergence issue
+note: i = 6 (precip in driest month) and i = 15 (max temp of warmest month) failed to converge. Check that manually.
+
+```{r}
+temp <- lmer(erm ~ bio6 + response + (1|source_filename) + (1|species_type2), data = data_b)
+summary(temp)
+
+summary(allFit(temp))
+```
+
+Change optimizer methods to one that is able to converge the model
+```{r}
+temp <- lmer(erm ~ bio6 + response + (1|source_filename) + (1|species_type2), data = data_b, control = lmerControl(optimizer = "nloptwrap", optCtrl = list(xtol_abs = 1e-8, ftol_abs = 1e-8))) #still not converging
+
+temp <- lmer(erm ~ bio6 + response + (1|source_filename) + (1|species_type2), data = data_b, control = lmerControl(optimizer = "nlminbwrap")) #try changing optimiser to another one that is good according to the person who chose the new lmer optimiser (douglas bates), according to the allfit output it converges
+
+#update the data with this new model
+  climate_lm_b[6, 3] <- (summary(temp)[["coefficients"]][c(2)])#est
+  climate_lm_b[6, 4] <- (summary(temp)[["coefficients"]][c(7)])#se
+  climate_lm_b[6, 5] <- (summary(temp)[["coefficients"]][c(17)])#tval
+  climate_lm_b[6, 6] <- (summary(temp)[["coefficients"]][c(22)])#pval
+  climate_lm_b[6, 7] <- r.squaredGLMM(temp)[1]
+  climate_lm_b$adj_p_val[6] <- p.adjust(climate_lm_b$p_val[6], method = "BY", n = 19)
+  climate_lm_b$adj_sig[6] <- ifelse(climate_lm_b$adj_p_val[6] < 0.05, T, F)
+
+```
+
+Check the other failure to converge
+```{r}
+temp <- lmer(erm ~ bio15 + response + (1|source_filename) + (1|species_type2), data = data_b)
+summary(temp)
+
+summary(allFit(temp))
+```
+
+Change optimizer methods for this one too
+```{r}
+temp <- lmer(erm ~ bio15 + response + (1|source_filename) + (1|species_type2), data = data_b, control = lmerControl(optimizer = "nlminbwrap")) 
+#update the data with this new model
+  climate_lm_b[15, 3] <- (summary(temp)[["coefficients"]][c(2)])#est
+  climate_lm_b[15, 4] <- (summary(temp)[["coefficients"]][c(7)])#se
+  climate_lm_b[15, 5] <- (summary(temp)[["coefficients"]][c(17)])#tval
+  climate_lm_b[15, 6] <- (summary(temp)[["coefficients"]][c(22)])#pval
+  climate_lm_b[15, 7] <- r.squaredGLMM(temp)[1]
+  climate_lm_b$adj_p_val[15] <- p.adjust(climate_lm_b$p_val[15], method = "BY", n = 19)
+  climate_lm_b$adj_sig[15] <- ifelse(climate_lm_b$adj_p_val[15] < 0.05, T, F)
+```
+
+#Community
+```{r}
+data_c <- data_clim %>% filter(experiment_type == "c")
+climate_lm_c <- tibble()
+climate_lm_c <- tibble(var = as.character(), formula = as.character(), est= as.numeric(), se= as.numeric(), t_val= as.numeric(), p_val= as.numeric(), marg_rsq = as.numeric())
+
+for (i in 1:19){
+  formula = paste0("erm ~ bio", i, " + response + (1|source_filename) + (1|species_type2)")
+  model = lmer(formula, data = data_c)
+  climate_lm_c[i, 1] <- paste0("bio", i)
+  climate_lm_c[i, 2] <- formula
+  climate_lm_c[i, 3] <- (summary(model)[["coefficients"]][c(2)])#est
+  climate_lm_c[i, 4] <- (summary(model)[["coefficients"]][c(7)])#se
+  climate_lm_c[i, 5] <- (summary(model)[["coefficients"]][c(17)])#tval
+  climate_lm_c[i, 6] <- (summary(model)[["coefficients"]][c(22)])#pval
+  climate_lm_c[i, 7] <- r.squaredGLMM(model)[1]
+  climate_lm_c[i, 8] <- paste0(model@optinfo$conv$lme4$messages, model@optinfo$warnings, " ")
+}
+
+climate_lm_c$adj_p_val <- p.adjust(climate_lm_c$p_val[1:19], method = "BY", n = 19)
+climate_lm_c$adj_sig <- ifelse(climate_lm_c$adj_p_val < 0.05, T, F)
+climate_lm_c$varname <- rev(c("Precipitation of Coldest Quarter", "Precipitation of Warmest Quarter", "Precipitation of Driest Quarter","Precipitation of Wettest Quarter",  "Precipitation Seasonality", "Precipitation of Driest Month", "Precipitation of Wettest Month", "Annual Precipitation", "Mean Temperature of Coldest Quarter", "Mean Temperature of Warmest Quarter","Mean Temperature of Driest Quarter", "Mean Temperature of Wettest Quarter",  "Temperature Annual Range","Min Temperature of Coldest Month", "Max Temperature of Warmest Month", "Temperature Seasonality", "Isothermality", "Mean Diurnal Range", "Annual Mean Temperature"))
+
+```
+
+Adjust CIs to match the p-val adjustments
+```{r}
+climate_lm_b[12:14] <- rh.sd.bonferroni(p = climate_lm_b$p_val[1:19], effect = climate_lm_b$est[1:19], effect.se = climate_lm_b$se[1:19], df = 334, digits = 5)
+
+climate_lm_c[12:14] <- rh.sd.bonferroni(p = climate_lm_c$p_val[1:19], effect = climate_lm_c$est[1:19], effect.se = climate_lm_c$se[1:19], df = 274, digits = 5)
+```
+
+#Graph
+```{r}
+fig_climate_b <- ggplot(climate_lm_b, aes(x = est, y = fct_rev(as_factor(var))))+
+  geom_errorbarh(aes(xmin = ci.adj.l, xmax = ci.adj.u, colour = adj_sig))+
+  geom_point(shape = 16, size = 3, aes(colour = adj_sig))+
+  xlab("Slope (Δ enemy release)")+
+  geom_vline(xintercept = 0, colour = "grey", linetype = "dashed")+
+  scale_y_discrete(labels = c("Precipitation of coldest quarter", "Precipitation of warmest quarter", "Precipitation of driest quarter","Precipitation of wettest quarter",  "Precipitation seasonality", "Precipitation of driest month", "Precipitation of wettest month", "Annual precipitation", "Mean temperature of coldest quarter", "Mean temperature of warmest quarter","Mean temperature of driest quarter", "Mean temperature of wettest quarter",  "Temperature annual range","Min temperature of coldest month", "Max temperature of warmest month", "Temperature seasonality", "Isothermality", "Mean diurnal range", "Annual mean temperature")) + 
+  ylab ("")+
+  scale_x_continuous(limits = c(-0.19, 0.1), 
+                     breaks = c(-0.15,-0.1, -0.05, 0, 0.05, 0.10))+
+  scale_colour_manual(values = c("grey", mypal[2]))+ #order allows grey to be n
+  theme_pubr()+
+  theme(axis.text = element_text(size = 12), legend.position = "none")
+
+fig_climate_b
+ggexport(fig_climate_b, filename = "./output/ch2 figures/Figure3b_unedited.pdf",
+         width = 6, height = 7)
+
+fig_climate_b_close <- ggplot(climate_lm_b, aes(x = est, y = fct_rev(as_factor(var))))+
+  geom_errorbarh(aes(xmin = ci.adj.l, xmax = ci.adj.u, colour = adj_sig))+
+  geom_point(shape = 16, size = 3, aes(colour = adj_sig))+
+  xlab("Slope (Δ enemy release)")+
+  geom_vline(xintercept = 0, colour = "grey", linetype = "dashed")+
+  scale_y_discrete(labels = c("Precipitation of coldest quarter", "Precipitation of warmest quarter", "Precipitation of driest quarter","Precipitation of wettest quarter",  "Precipitation seasonality", "Precipitation of driest month", "Precipitation of wettest month", "Annual precipitation", "Mean temperature of coldest quarter", "Mean temperature of warmest quarter","Mean temperature of driest quarter", "Mean temperature of wettest quarter",  "Temperature annual range","Min temperature of coldest month", "Max temperature of warmest month", "Temperature seasonality", "Isothermality", "Mean diurnal range", "Annual mean temperature")) + 
+  ylab ("")+
+  scale_x_continuous(limits = c(-0.19/4, 0.1/4), 
+                     breaks = c(-0.15/4,-0.1/4, -0.05/4, 0, 0.05/4, 0.10/4))+
+  scale_colour_manual(values = c("grey", mypal[2]))+ #order allows grey to be n
+  theme_pubr()+
+  theme(axis.text = element_text(size = 12), legend.position = "none")
+
+fig_climate_b_close
+ggexport(fig_climate_b_close, filename = "./output/ch2 figures/Figure3b2_unedited.pdf",
+         width = 6, height = 7)
+```
+
+
+```{r}
+fig_climate_c <- ggplot(climate_lm_c, aes(x = est, y = fct_rev(as_factor(var))))+
+  geom_errorbarh(aes(xmin = ci.adj.l, xmax = ci.adj.u, colour = adj_sig))+
+  geom_point(shape = 16, size = 3, aes(colour = adj_sig))+
+  xlab("Slope (Δ enemy release)")+
+  geom_vline(xintercept = 0, colour = "grey", linetype = "dashed")+
+  scale_y_discrete(labels = c("Precipitation of coldest quarter", "Precipitation of warmest quarter", "Precipitation of driest quarter","Precipitation of wettest quarter",  "Precipitation seasonality", "Precipitation of driest month", "Precipitation of wettest month", "Annual precipitation", "Mean temperature of coldest quarter", "Mean temperature of warmest quarter","Mean temperature of driest quarter", "Mean temperature of wettest quarter",  "Temperature annual range","Min temperature of coldest month", "Max temperature of warmest month", "Temperature seasonality", "Isothermality", "Mean diurnal range", "Annual mean temperature")) + 
+  ylab ("")+
+  scale_x_continuous(limits = c(-0.1, 0.19), 
+                     breaks = c(-0.1, -0.05, 0, 0.05, 0.10, 0.15))+
+  scale_colour_manual(values = c("grey", mypal[5]))+ #order allows grey to be n
+  theme_pubr()+
+  theme(axis.text = element_text(size = 12), legend.position = "none")
+
+fig_climate_c
+ggexport(fig_climate_c, filename = "./output/ch2 figures/Figure3c_unedited.pdf",
+         width = 6, height = 7)
+
+fig_climate_c_close <- ggplot(climate_lm_c, aes(x = est, y = fct_rev(as_factor(var))))+
+  geom_errorbarh(aes(xmin = ci.adj.l, xmax = ci.adj.u, colour = adj_sig))+
+  geom_point(shape = 16, size = 3, aes(colour = adj_sig))+
+  xlab("Slope (Δ enemy release)")+
+  geom_vline(xintercept = 0, colour = "grey", linetype = "dashed")+
+  scale_y_discrete(labels = c("Precipitation of coldest quarter", "Precipitation of warmest quarter", "Precipitation of driest quarter","Precipitation of wettest quarter",  "Precipitation seasonality", "Precipitation of driest month", "Precipitation of wettest month", "Annual precipitation", "Mean temperature of coldest quarter", "Mean temperature of warmest quarter","Mean temperature of driest quarter", "Mean temperature of wettest quarter",  "Temperature annual range","Min temperature of coldest month", "Max temperature of warmest month", "Temperature seasonality", "Isothermality", "Mean diurnal range", "Annual mean temperature")) + 
+  ylab ("")+
+  scale_x_continuous(limits = c(-0.1/4, 0.19/4), 
+                     breaks = c(-0.1/4, -0.05/4, 0, 0.05/4, 0.10/4, 0.15/4))+
+  scale_colour_manual(values = c("grey", mypal[5]))+ #order allows grey to be n
+  theme_pubr()+
+  theme(axis.text = element_text(size = 12), legend.position = "none")
+
+fig_climate_c_close
+ggexport(fig_climate_c_close, filename = "./output/ch2 figures/Figure3c2_unedited.pdf",
+         width = 6, height = 7)
+```
+ 
+ 
+ 
+#Does latitude, temp range and temperature explain the same variation? (unused)
+```{r}
+lm_lat_temp_correlations <- lmer(erm ~ abs(location_lat) + bio2 + (1|source_filename) + (1|species_type2), data = data_b)
+
+lm_lat_season_correlations <- lmer(erm ~ abs(location_lat) + bio6 + (1|source_filename) + (1|species_type2), data = data_b)
+
+lm_temp_season_correlations <- lmer(erm ~ bio2 + bio6 + (1|source_filename) + (1|species_type2), data = data_b)
+
+summary(lm_lat_temp_correlations)
+summary(lm_lat_season_correlations)
+summary(lm_temp_season_correlations)
+```
